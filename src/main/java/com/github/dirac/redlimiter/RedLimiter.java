@@ -25,27 +25,19 @@ public class RedLimiter {
     private static final String STABLE_INTERVAL_MICROS = "stableIntervalMicros";
     private static final String NEXT_FREE_TICKET_MICROS = "nextFreeTicketMicros";
 
-    private static final String SCRIPT = "RedLimiter.lua";
+    private static final String SCRIPT_LUA = "RedLimiter.lua";
+    private static final String SCRIPT = readScript();
 
     private static final ConcurrentMap<String, RedLimiter> LIMITERS = new ConcurrentHashMap<>();
 
     private final String key;
     private final JedisPool jedisPool;
     private final JedisCluster jedisCluster;
-    private final String sha1;
     private double qps;
+    private String sha1;
     private volatile int batchSize = 100;
     private volatile long lastMillis = 0L;
     private volatile long batchInterval = 100L;
-
-    private void setProperties() {
-        Map<String, String> limiter = new HashMap<>();
-        limiter.put(STORED_PERMITS, Double.toString(qps));
-        limiter.put(MAX_PERMITS, Double.toString(qps));
-        limiter.put(STABLE_INTERVAL_MICROS, Double.toString(TimeUnit.SECONDS.toMicros(1L) / qps));
-        limiter.put(NEXT_FREE_TICKET_MICROS, "0");
-        jedisPool.getResource().hmset(key, limiter);
-    }
 
     private AtomicInteger qpsHolder = new AtomicInteger(0);
 
@@ -55,31 +47,80 @@ public class RedLimiter {
         this.jedisPool = jedisPool;
         this.jedisCluster = jedisCluster;
         if (jedisPool == null && jedisCluster == null) {
-            throw new CreateException("no ");
+            throw new CreateException("no redis client");
         }
         if (setProperties) {
             setProperties();
         }
-        try {
-            this.sha1 = loadScript();
-        } catch (IOException e) {
-            throw new CreateException(e);
+        loadScriptSha1();
+    }
+
+    private void setProperties() {
+        Map<String, String> limiter = new HashMap<>();
+        limiter.put(STORED_PERMITS, Double.toString(qps));
+        limiter.put(MAX_PERMITS, Double.toString(qps));
+        limiter.put(STABLE_INTERVAL_MICROS, Double.toString(TimeUnit.SECONDS.toMicros(1L) / qps));
+        limiter.put(NEXT_FREE_TICKET_MICROS, "0");
+
+        if (jedisPool != null) {
+            Jedis jedis = null;
+            try {
+                jedis = jedisPool.getResource();
+                jedis.hmset(key, limiter);
+                jedisPool.returnResource(jedis);
+            } catch (Exception e) {
+                if (jedis != null) {
+                    jedisPool.returnBrokenResource(jedis);
+                }
+                throw new CreateException(e);
+            }
+        } else {
+            try {
+                jedisCluster.hmset(key, limiter);
+            } catch (Exception e) {
+                throw new CreateException(e);
+            }
         }
     }
 
-    private String loadScript() throws IOException {
-        InputStream is = this.getClass().getClassLoader().getResourceAsStream(SCRIPT);
-        Objects.requireNonNull(is);
-        StringBuilder builder = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(is))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                builder.append(line);
-                builder.append("\n");
+    private void loadScriptSha1() {
+        if (jedisPool != null) {
+            Jedis jedis = null;
+            try {
+                jedis = jedisPool.getResource();
+                this.sha1 = jedis.scriptLoad(SCRIPT);
+                jedisPool.returnResource(jedis);
+            } catch (Exception e) {
+                if (jedis != null) {
+                    jedisPool.returnBrokenResource(jedis);
+                }
+                throw new CreateException(e);
+            }
+        } else {
+            try {
+                this.sha1 = jedisCluster.scriptLoad(SCRIPT, key);
+            } catch (Exception e) {
+                throw new CreateException(e);
             }
         }
-        String script = builder.toString();
-        return jedisPool.getResource().scriptLoad(script);
+    }
+
+    private static String readScript() {
+        InputStream is = RedLimiter.class.getClassLoader().getResourceAsStream(SCRIPT_LUA);
+        Objects.requireNonNull(is);
+        StringBuilder builder = new StringBuilder();
+        try {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(is))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    builder.append(line);
+                    builder.append("\n");
+                }
+            }
+        } catch (IOException e) {
+            // will not reach here
+        }
+        return builder.toString();
     }
 
 

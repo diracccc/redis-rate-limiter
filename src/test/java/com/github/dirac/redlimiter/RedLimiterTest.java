@@ -20,7 +20,7 @@ public class RedLimiterTest {
         JedisPoolConfig jedisPoolConfig = new JedisPoolConfig();
         jedisPoolConfig.setMaxTotal(200);
         JedisPool jedisPool = new JedisPool(jedisPoolConfig, "localhost");
-        limiter = RedLimiter.create("1000", 100, jedisPool,true);
+        limiter = RedLimiter.create("1000", 1, jedisPool,true);
     }
 
     @After
@@ -32,7 +32,7 @@ public class RedLimiterTest {
 
     @org.junit.Test
     public void acquire() throws Exception {
-        for (int i = 0; i < 500; i++) {
+        for (int i = 0; i < 10; i++) {
             final int index = i;
             pool.execute(() -> {
                 double acquire = limiter.acquire(1);
@@ -71,14 +71,13 @@ public class RedLimiterTest {
         JedisPoolConfig jedisPoolConfig = new JedisPoolConfig();
         jedisPoolConfig.setMaxTotal(50);
         JedisPool jedisPool = new JedisPool(jedisPoolConfig, "localhost");
-        RedLimiter redLimiter = RedLimiter.create("500", 100, jedisPool, true);
-        redLimiter.setBatchSize(10);
-        for (int i = 0; i < 500; i++) {
+        RedLimiter redLimiter = RedLimiter.create("500", 1000, jedisPool, true);
+        redLimiter.setBatchSize(50);
+        for (int i = 0; i < 1000; i++) {
             final int index = i;
             pool.execute(() -> {
-                System.out.println("task" + index);
-                double acquire = redLimiter.acquire(1);
-                System.out.println(index + " \t" + acquire + " \t" + (System.currentTimeMillis()));
+                double acquire = redLimiter.acquireLazy(10);
+                System.out.println(index + " \t" + acquire + " \t" + new Date());
             });
         }
         Thread.sleep(10 * 1000L);
