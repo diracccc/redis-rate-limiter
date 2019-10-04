@@ -1,5 +1,5 @@
 # RedLimiter
-RedLimiter(**Red**is rate **limiter**)，与Guava RateLimiter功能类似，基于Redis+Lua+令牌桶算法，提供
+RedLimiter(**Red**is rate **limiter**)，与Guava RateLimiter功能类似，基于Redis+Lua+令牌桶算法实现的分布式限流器，提供
 - 限流
 - 流量整形
 - 批处理避免Redis热点
