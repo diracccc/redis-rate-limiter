@@ -1,6 +1,6 @@
 package com.github.dirac.redlimiter;
 
-public class CreateException extends Exception {
+public class CreateException extends RuntimeException {
 
     public CreateException() {
     }

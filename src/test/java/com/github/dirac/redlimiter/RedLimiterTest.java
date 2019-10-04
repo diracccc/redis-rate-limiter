@@ -16,11 +16,11 @@ public class RedLimiterTest {
     private static RedLimiter limiter;
 
     @BeforeClass
-    public static void init() throws Exception {
+    public static void init() {
         JedisPoolConfig jedisPoolConfig = new JedisPoolConfig();
-        jedisPoolConfig.setMaxTotal(50);
+        jedisPoolConfig.setMaxTotal(200);
         JedisPool jedisPool = new JedisPool(jedisPoolConfig, "localhost");
-        limiter = RedLimiter.create("1000", 1, jedisPool);
+        limiter = RedLimiter.create("1000", 100, jedisPool,true);
     }
 
     @After
@@ -28,11 +28,11 @@ public class RedLimiterTest {
         Thread.sleep(2000L);
     }
 
-    private ExecutorService pool = Executors.newFixedThreadPool(10);
+    private ExecutorService pool = Executors.newFixedThreadPool(500);
 
     @org.junit.Test
     public void acquire() throws Exception {
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 500; i++) {
             final int index = i;
             pool.execute(() -> {
                 double acquire = limiter.acquire(1);
@@ -71,15 +71,16 @@ public class RedLimiterTest {
         JedisPoolConfig jedisPoolConfig = new JedisPoolConfig();
         jedisPoolConfig.setMaxTotal(50);
         JedisPool jedisPool = new JedisPool(jedisPoolConfig, "localhost");
-        RedLimiter redLimiter = RedLimiter.create("100", 1000, jedisPool, true);
-
-        for (int i = 0; i < 5000; i++) {
+        RedLimiter redLimiter = RedLimiter.create("500", 100, jedisPool, true);
+        redLimiter.setBatchSize(10);
+        for (int i = 0; i < 500; i++) {
             final int index = i;
             pool.execute(() -> {
-                double acquire = redLimiter.acquireLazy(1);
-                System.out.println(index + " \t" + acquire + " \t" + new Date());
+                System.out.println("task" + index);
+                double acquire = redLimiter.acquire(1);
+                System.out.println(index + " \t" + acquire + " \t" + (System.currentTimeMillis()));
             });
         }
-        Thread.sleep(5 * 1000L);
+        Thread.sleep(10 * 1000L);
     }
 }

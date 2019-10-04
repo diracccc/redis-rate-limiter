@@ -1,5 +1,7 @@
 package com.github.dirac.redlimiter;
 
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisCluster;
 import redis.clients.jedis.JedisPool;
 
 import java.io.BufferedReader;
@@ -12,9 +14,7 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.concurrent.TimeUnit.*;
 
@@ -31,6 +31,7 @@ public class RedLimiter {
 
     private final String key;
     private final JedisPool jedisPool;
+    private final JedisCluster jedisCluster;
     private final String sha1;
     private double qps;
     private volatile int batchSize = 100;
@@ -48,56 +49,54 @@ public class RedLimiter {
 
     private AtomicInteger qpsHolder = new AtomicInteger(0);
 
-    private RedLimiter(String key, double qps, JedisPool jedisPool, boolean setProperties) throws IOException {
+    private RedLimiter(String key, double qps, JedisPool jedisPool, JedisCluster jedisCluster, boolean setProperties) {
         this.key = key;
         this.qps = qps;
         this.jedisPool = jedisPool;
+        this.jedisCluster = jedisCluster;
+        if (jedisPool == null && jedisCluster == null) {
+            throw new CreateException("no ");
+        }
         if (setProperties) {
             setProperties();
         }
-        this.sha1 = loadScript();
+        try {
+            this.sha1 = loadScript();
+        } catch (IOException e) {
+            throw new CreateException(e);
+        }
     }
 
     private String loadScript() throws IOException {
         InputStream is = this.getClass().getClassLoader().getResourceAsStream(SCRIPT);
         Objects.requireNonNull(is);
         StringBuilder builder = new StringBuilder();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(is));
-        try {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(is))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 builder.append(line);
                 builder.append("\n");
             }
-        } finally {
-            reader.close();
-            is.close();
         }
         String script = builder.toString();
         return jedisPool.getResource().scriptLoad(script);
     }
 
 
-    public static RedLimiter create(String key, double qps, JedisPool jedisPool) throws CreateException {
+    public static RedLimiter create(String key, double qps, JedisPool jedisPool) {
         return create(key, qps, jedisPool, false);
     }
 
-    public static RedLimiter create(String key, double qps, JedisPool jedisPool, boolean setProperties) throws CreateException {
-        AtomicReference<Throwable> t = new AtomicReference<>();
-        AtomicBoolean fail = new AtomicBoolean(false);
-        RedLimiter limiter = LIMITERS.computeIfAbsent(key, k -> {
-            try {
-                return new RedLimiter(k, qps, jedisPool, setProperties);
-            } catch (IOException e) {
-                fail.set(true);
-                t.set(e);
-            }
-            return null;
-        });
-        if (fail.get()) {
-            throw new CreateException(t.get());
-        }
-        return limiter;
+    public static RedLimiter create(String key, double qps, JedisPool jedisPool, boolean setProperties) {
+        return LIMITERS.computeIfAbsent(key, k -> new RedLimiter(k, qps, jedisPool, null, setProperties));
+    }
+
+    public static RedLimiter create(String key, double qps, JedisCluster jedisCluster) {
+        return create(key, qps, jedisCluster, false);
+    }
+
+    public static RedLimiter create(String key, double qps, JedisCluster jedisCluster, boolean setProperties) {
+        return LIMITERS.computeIfAbsent(key, k -> new RedLimiter(k, qps, null, jedisCluster, setProperties));
     }
 
     public void setRate(double qps) {
@@ -119,7 +118,7 @@ public class RedLimiter {
 
     public double acquireLazy(int batchQps) {
         long currentMillis = System.currentTimeMillis();
-        if (qpsHolder.get() >= batchSize || (currentMillis - this.lastMillis) < batchInterval) {
+        if (qpsHolder.get() >= batchSize || (currentMillis - this.lastMillis) > batchInterval) {
             int qps = qpsHolder.getAndSet(0);
             this.lastMillis = currentMillis;
             return acquire(qps);
@@ -131,8 +130,23 @@ public class RedLimiter {
 
     public double acquire(double qps) {
         long nowMicros = MILLISECONDS.toMicros(System.currentTimeMillis());
-        long waitMicros = (long) jedisPool.getResource().evalsha(sha1, 1, key, "acquire",
-                Double.toString(qps), Long.toString(nowMicros));
+        long waitMicros = 0L;
+        if (jedisPool != null) {
+            Jedis jedis = null;
+            try {
+                jedis = jedisPool.getResource();
+                waitMicros = (long) jedis.evalsha(sha1, 1, key, "acquire",
+                        Double.toString(qps), Long.toString(nowMicros));
+                jedisPool.returnResource(jedis);
+            } catch (Exception e) {
+                if (jedis != null) {
+                    jedisPool.returnBrokenResource(jedis);
+                }
+            }
+        } else {
+            waitMicros = (long) jedisCluster.evalsha(sha1, 1, key, "acquire",
+                    Double.toString(qps), Long.toString(nowMicros));
+        }
         double wait = 1.0 * waitMicros / SECONDS.toMicros(1L);
         sleepUninterruptibly(waitMicros, MICROSECONDS);
         return wait;
@@ -149,8 +163,23 @@ public class RedLimiter {
     public boolean tryAcquire(double qps, long timeout, TimeUnit unit) {
         long nowMicros = MILLISECONDS.toMicros(System.currentTimeMillis());
         long timeoutMicros = unit.toMicros(timeout);
-        long waitMicros = (long) jedisPool.getResource().evalsha(sha1, 1, key, "tryAcquire",
-                Double.toString(qps), Long.toString(nowMicros), Long.toString(timeoutMicros));
+        long waitMicros = 0L;
+        if (jedisPool != null) {
+            Jedis jedis = null;
+            try {
+                jedis = jedisPool.getResource();
+                waitMicros = (long) jedis.evalsha(sha1, 1, key, "tryAcquire",
+                        Double.toString(qps), Long.toString(nowMicros), Long.toString(timeoutMicros));
+                jedisPool.returnResource(jedis);
+            } catch (Exception e) {
+                if (jedis != null) {
+                    jedisPool.returnBrokenResource(jedis);
+                }
+            }
+        } else {
+            waitMicros = (long) jedisCluster.evalsha(sha1, 1, key, "tryAcquire",
+                    Double.toString(qps), Long.toString(nowMicros), Long.toString(timeoutMicros));
+        }
         if (waitMicros < 0) {
             return false;
         }
