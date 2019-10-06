@@ -63,15 +63,9 @@ public class RedLimiter {
         limiter.put(NEXT_FREE_TICKET_MICROS, "0");
 
         if (jedisPool != null) {
-            Jedis jedis = null;
-            try {
-                jedis = jedisPool.getResource();
+            try (Jedis jedis = jedisPool.getResource()) {
                 jedis.hmset(key, limiter);
-                jedisPool.returnResource(jedis);
             } catch (Exception e) {
-                if (jedis != null) {
-                    jedisPool.returnBrokenResource(jedis);
-                }
                 throw new CreateException(e);
             }
         } else {
@@ -85,15 +79,9 @@ public class RedLimiter {
 
     private void loadScriptSha1() {
         if (jedisPool != null) {
-            Jedis jedis = null;
-            try {
-                jedis = jedisPool.getResource();
+            try (Jedis jedis = jedisPool.getResource()) {
                 this.sha1 = jedis.scriptLoad(SCRIPT);
-                jedisPool.returnResource(jedis);
             } catch (Exception e) {
-                if (jedis != null) {
-                    jedisPool.returnBrokenResource(jedis);
-                }
                 throw new CreateException(e);
             }
         } else {
@@ -171,25 +159,20 @@ public class RedLimiter {
 
     public double acquire(double qps) {
         long nowMicros = MILLISECONDS.toMicros(System.currentTimeMillis());
-        long waitMicros = 0L;
+        long waitMicros;
         if (jedisPool != null) {
-            Jedis jedis = null;
-            try {
-                jedis = jedisPool.getResource();
+            try (Jedis jedis = jedisPool.getResource()) {
                 waitMicros = (long) jedis.evalsha(sha1, 1, key, "acquire",
                         Double.toString(qps), Long.toString(nowMicros));
-                jedisPool.returnResource(jedis);
-            } catch (Exception e) {
-                if (jedis != null) {
-                    jedisPool.returnBrokenResource(jedis);
-                }
             }
         } else {
             waitMicros = (long) jedisCluster.evalsha(sha1, 1, key, "acquire",
                     Double.toString(qps), Long.toString(nowMicros));
         }
         double wait = 1.0 * waitMicros / SECONDS.toMicros(1L);
-        sleepUninterruptibly(waitMicros, MICROSECONDS);
+        if (waitMicros > 0) {
+            sleepUninterruptibly(waitMicros, MICROSECONDS);
+        }
         return wait;
     }
 
@@ -204,18 +187,11 @@ public class RedLimiter {
     public boolean tryAcquire(double qps, long timeout, TimeUnit unit) {
         long nowMicros = MILLISECONDS.toMicros(System.currentTimeMillis());
         long timeoutMicros = unit.toMicros(timeout);
-        long waitMicros = 0L;
+        long waitMicros;
         if (jedisPool != null) {
-            Jedis jedis = null;
-            try {
-                jedis = jedisPool.getResource();
+            try (Jedis jedis = jedisPool.getResource()) {
                 waitMicros = (long) jedis.evalsha(sha1, 1, key, "tryAcquire",
                         Double.toString(qps), Long.toString(nowMicros), Long.toString(timeoutMicros));
-                jedisPool.returnResource(jedis);
-            } catch (Exception e) {
-                if (jedis != null) {
-                    jedisPool.returnBrokenResource(jedis);
-                }
             }
         } else {
             waitMicros = (long) jedisCluster.evalsha(sha1, 1, key, "tryAcquire",
@@ -224,7 +200,9 @@ public class RedLimiter {
         if (waitMicros < 0) {
             return false;
         }
-        sleepUninterruptibly(waitMicros, MICROSECONDS);
+        if (waitMicros > 0) {
+            sleepUninterruptibly(waitMicros, MICROSECONDS);
+        }
         return true;
     }
 
