@@ -146,13 +146,13 @@ public class RedLimiter {
     }
 
     public double acquireLazy(int batchQps) {
+        qpsHolder.addAndGet(batchQps);
         long currentMillis = System.currentTimeMillis();
-        if (qpsHolder.get() >= batchSize || (currentMillis - this.lastMillis) > batchInterval) {
+        if (qpsHolder.get() >= batchSize || (currentMillis - this.lastMillis) >= batchInterval) {
             int qps = qpsHolder.getAndSet(0);
             this.lastMillis = currentMillis;
             return acquire(qps);
         } else {
-            qpsHolder.addAndGet(batchQps);
             return 0D;
         }
     }
