@@ -19,7 +19,7 @@
 
     <properties>
         <jedis.version>2.9.0</jedis.version>
-        <junit.version>4.12</junit.version>
+        <junit.version>4.13.1</junit.version>
     </properties>
 
     <name>Archetype - RedLimiter</name>
