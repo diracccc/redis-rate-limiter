@@ -12,7 +12,7 @@ local function reserveAndGetWaitLength(key, permits, nowMicros)
     if (nowMicros >= nextMicros)
     then
         local newPermits = (nowMicros - nextMicros) / interval
-        stored = math.min(max, stored + newPermits)
+        stored = math.min(max, newPermits)
         nextMicros = nowMicros
     end
 
