@@ -12,12 +12,10 @@ local function reserveAndGetWaitLength(key, permits, nowMicros)
     if (nowMicros >= nextMicros)
     then
         local newPermits = (nowMicros - nextMicros) / interval
-        local newStored = math.min(max, stored + newPermits)
-        redis.call('HMSET', key, storedPermits, newStored, nextFreeTicketMicros, nowMicros)
+        stored = math.min(max, newPermits)
+        nextMicros = nowMicros
     end
 
-    nextMicros = tonumber(redis.call('HGET', key, nextFreeTicketMicros))
-    stored = tonumber(redis.call('HGET', key, storedPermits))
     local storedToSpend = math.min(stored, permits)
     local freshPermits = permits - storedToSpend
     local waitMicros = freshPermits * interval
